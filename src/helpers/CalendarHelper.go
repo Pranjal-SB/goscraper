@@ -1,6 +1,7 @@
 package helpers
 
 import (
+	"errors"
 	"fmt"
 	"goscraper/src/types"
 	"goscraper/src/utils"
@@ -59,6 +60,10 @@ func (c *CalendarFetcher) GetCalendar() (*types.CalendarResponse, error) {
 	}
 
 	statusCode := resp.StatusCode()
+	if statusCode == fasthttp.StatusUnauthorized || statusCode == fasthttp.StatusForbidden {
+		log.Printf("CalendarHelper.GetCalendar: server returned status %d", statusCode)
+		return nil, errors.New("invalid response format")
+	}
 	if statusCode != fasthttp.StatusOK {
 		log.Printf("CalendarHelper.GetCalendar: server returned status %d", statusCode)
 		return &types.CalendarResponse{
@@ -72,12 +77,7 @@ func (c *CalendarFetcher) GetCalendar() (*types.CalendarResponse, error) {
 	calendar, err := c.parseCalendar(string(resp.Body()))
 	if err != nil {
 		log.Printf("CalendarHelper.GetCalendar: failed to parse calendar - %v", err)
-		return &types.CalendarResponse{
-			Error:    true,
-			Message:  err.Error(),
-			Status:   500,
-			Calendar: []types.CalendarMonth{},
-		}, nil
+		return nil, err
 	}
 
 	calendar.Status = statusCode
@@ -91,13 +91,13 @@ func (c *CalendarFetcher) parseCalendar(html string) (*types.CalendarResponse, e
 	} else {
 		parts := strings.Split(html, "zmlvalue=\"")
 		if len(parts) < 2 {
-			log.Printf("CalendarHelper.parseCalendar: invalid HTML format")
-			return &types.CalendarResponse{
-				Error:    true,
-				Message:  "invalid HTML format",
-				Status:   500,
-				Calendar: []types.CalendarMonth{},
-			}, nil
+			// Academia serves the signed-out page instead of the planner, so
+			// the marker is missing. Report it the way every other helper
+			// reports an expired session: HandleError turns "invalid response
+			// format" into tokenInvalid, which sends the user back to log in
+			// rather than rendering an empty calendar.
+			log.Printf("CalendarHelper.parseCalendar: planner marker absent, session likely expired")
+			return nil, errors.New("invalid response format")
 		}
 		decodedHTML := utils.ConvertHexToHTML(strings.Split(parts[1], "\" > </div> </div>")[0])
 		htmlText = utils.DecodeHTMLEntities(decodedHTML)
